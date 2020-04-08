@@ -136,6 +136,9 @@ class Data:
         self.s_dev_Ids = []
         self.batch_norm = False
 
+        self.use_gnn = False
+        self.max_hop = 1
+        self.gnn_layer = 1
 
     def show_data_summary(self):
         
@@ -221,18 +224,10 @@ class Data:
         print("     elmo_gamma: %s" % (self.elmo_gamma))
 
         print(" " + "++" * 20)
-        print(" domain adaptation:")
-        print("     mode: %s" % (self.mode))
-        print("     lm_model_dir: %s" % (self.lm_model_dir))
-        print("     lm_obj_acc: %s" % (self.lm_obj_acc))
-        print("     s_lm: %s" % (self.s_lm))
-        print("     t_lm: %s" % (self.t_lm))
-        print("     s_ner_train: %s" % (self.s_ner_train))
-        print("     s_ner_eval: %s" % (self.s_ner_eval))
-        print("     s_label_alphabet_size: %s" % (self.s_label_alphabet_size))
-        print("     Source Train instance number: %s"%(len(self.s_train_texts)))
-        print("     Source Dev   instance number: %s"%(len(self.s_dev_texts)))
-        print("     batch normalization: %s" % (self.batch_norm))
+        print(" GNN:")
+        print("     use_gnn: %s" % (self.use_gnn))
+        print("     max_hop: %s" % (self.max_hop))
+        print("     gnn_layer: %s" % (self.gnn_layer))
 
         print("DATA SUMMARY END.")
         print("++"*50)
@@ -247,12 +242,21 @@ class Data:
             ## if sequence labeling data format i.e. CoNLL 2003, split by ' '
             items = open(self.train_dir,'r').readline().strip('\n').split()
         total_column = len(items)
-        if total_column > 2:
-            for idx in range(1, total_column-1):
-                feature_prefix = items[idx].split(']',1)[0]+"]"
-                self.feature_alphabets.append(Alphabet(feature_prefix))
-                self.feature_name.append(feature_prefix)
-                print("Find feature: ", feature_prefix)
+        # if total_column > 2:
+        #     for idx in range(1, total_column-1):
+        #         feature_prefix = items[idx].split(']',1)[0]+"]"
+        #         self.feature_alphabets.append(Alphabet(feature_prefix))
+        #         self.feature_name.append(feature_prefix)
+        #         print("Find feature: ", feature_prefix)
+
+        for idx in range(1, total_column-1):
+            if items[idx][0] != '[':
+                continue
+            feature_prefix = items[idx].split(']',1)[0]+"]"
+            self.feature_alphabets.append(Alphabet(feature_prefix))
+            self.feature_name.append(feature_prefix)
+            print("Find feature: ", feature_prefix)
+
         self.feature_num = len(self.feature_alphabets)
         self.pretrain_feature_embeddings = [None]*self.feature_num
         self.feature_emb_dims = [20]*self.feature_num
@@ -327,7 +331,7 @@ class Data:
                         word = normalize_word(word)
                     if self.lowercase_tokens:
                         word = word.lower()
-                    label = pairs[0] if self.mode=='lm' and ner_data else pairs[-1]
+                    label = pairs[-1]
                     if build_label_alphabet:
                         if target:
                             self.label_alphabet.add(label)
@@ -352,21 +356,18 @@ class Data:
         for idx in range(self.feature_num):
             self.feature_alphabet_sizes[idx] = self.feature_alphabets[idx].size()
 
-        if self.mode == 'lm':
-            self.tagScheme = 'NoSeg'
-        else:
-            startS = False
-            startB = False
-            for label,_ in self.label_alphabet.iteritems():
-                if "S-" in label.upper():
-                    startS = True
-                elif "B-" in label.upper():
-                    startB = True
-            if startB:
-                if startS:
-                    self.tagScheme = "BMES"
-                else:
-                    self.tagScheme = "BIO"
+        startS = False
+        startB = False
+        for label,_ in self.label_alphabet.iteritems():
+            if "S-" in label.upper():
+                startS = True
+            elif "B-" in label.upper():
+                startB = True
+        if startB:
+            if startS:
+                self.tagScheme = "BMES"
+            else:
+                self.tagScheme = "BIO"
 
         if self.sentence_classification:
             self.tagScheme = "Not sequence labeling task"
@@ -399,25 +400,13 @@ class Data:
 
         if self.mode == 'ner' or self.mode == 'lm_ner' or self.mode == 'finetune' or self.mode == 'lm_finetune':
             if name == "train":
-                self.train_texts, self.train_Ids = read_instance(self.train_dir, self.word_alphabet, self.char_alphabet, self.feature_alphabets, self.label_alphabet, self.number_normalized, self.MAX_SENTENCE_LENGTH, self.sentence_classification, self.split_token, self.lowercase_tokens)
+                self.train_texts, self.train_Ids = read_instance(self.train_dir, self.max_hop, self.word_alphabet, self.char_alphabet, self.feature_alphabets, self.label_alphabet, self.number_normalized, self.MAX_SENTENCE_LENGTH, self.sentence_classification, self.split_token, self.lowercase_tokens)
             elif name == "dev":
-                self.dev_texts, self.dev_Ids = read_instance(self.dev_dir, self.word_alphabet, self.char_alphabet, self.feature_alphabets, self.label_alphabet, self.number_normalized, self.MAX_SENTENCE_LENGTH, self.sentence_classification, self.split_token, self.lowercase_tokens)
+                self.dev_texts, self.dev_Ids = read_instance(self.dev_dir, self.max_hop, self.word_alphabet, self.char_alphabet, self.feature_alphabets, self.label_alphabet, self.number_normalized, self.MAX_SENTENCE_LENGTH, self.sentence_classification, self.split_token, self.lowercase_tokens)
             elif name == "test":
-                self.test_texts, self.test_Ids = read_instance(self.test_dir, self.word_alphabet, self.char_alphabet, self.feature_alphabets, self.label_alphabet, self.number_normalized, self.MAX_SENTENCE_LENGTH, self.sentence_classification, self.split_token, self.lowercase_tokens)
+                self.test_texts, self.test_Ids = read_instance(self.test_dir, self.max_hop, self.word_alphabet, self.char_alphabet, self.feature_alphabets, self.label_alphabet, self.number_normalized, self.MAX_SENTENCE_LENGTH, self.sentence_classification, self.split_token, self.lowercase_tokens)
             elif name == "raw":
-                self.raw_texts, self.raw_Ids = read_instance(self.raw_dir, self.word_alphabet, self.char_alphabet, self.feature_alphabets, self.label_alphabet, self.number_normalized, self.MAX_SENTENCE_LENGTH, self.sentence_classification, self.split_token, self.lowercase_tokens)
-            elif name == 's_train':
-                self.s_train_texts, self.s_train_Ids = read_instance(self.s_ner_train, self.word_alphabet, self.char_alphabet,
-                                                                 self.feature_alphabets, self.s_label_alphabet,
-                                                                 self.number_normalized, self.MAX_SENTENCE_LENGTH,
-                                                                 self.sentence_classification, self.split_token,
-                                                                 self.lowercase_tokens)
-            elif name == 's_dev':
-                self.s_dev_texts, self.s_dev_Ids = read_instance(self.s_ner_eval, self.word_alphabet, self.char_alphabet,
-                                                             self.feature_alphabets, self.s_label_alphabet,
-                                                             self.number_normalized, self.MAX_SENTENCE_LENGTH,
-                                                             self.sentence_classification, self.split_token,
-                                                             self.lowercase_tokens)
+                self.raw_texts, self.raw_Ids = read_instance(self.raw_dir, self.max_hop, self.word_alphabet, self.char_alphabet, self.feature_alphabets, self.label_alphabet, self.number_normalized, self.MAX_SENTENCE_LENGTH, self.sentence_classification, self.split_token, self.lowercase_tokens)
             else:
                 print("Error: you can only generate train/dev/test instance! Illegal input:%s"%(name))
         else:
@@ -689,31 +678,16 @@ class Data:
         if the_item in config:
             self.elmo_gamma = float(config[the_item])
 
-        # domain adaptation
-        the_item = 'mode'
+        # gnn
+        the_item = 'use_gnn'
         if the_item in config:
-            self.mode = config[the_item]
-        the_item = 'lm_model_dir'
+            self.use_gnn = str2bool(config[the_item])
+        the_item = 'max_hop'
         if the_item in config:
-            self.lm_model_dir = config[the_item]
-        the_item = 'lm_obj_acc'
+            self.max_hop = int(config[the_item])
+        the_item = 'gnn_layer'
         if the_item in config:
-            self.lm_obj_acc = float(config[the_item])
-        the_item = 's_lm'
-        if the_item in config:
-            self.s_lm = config[the_item]
-        the_item = 't_lm'
-        if the_item in config:
-            self.t_lm = config[the_item]
-        the_item = 's_ner_train'
-        if the_item in config:
-            self.s_ner_train = config[the_item]
-        the_item = 's_ner_eval'
-        if the_item in config:
-            self.s_ner_eval = config[the_item]
-        the_item = 'batch_norm'
-        if the_item in config:
-            self.batch_norm = str2bool(config[the_item])
+            self.gnn_layer = int(config[the_item])
 
 
 def config_file_to_dict(input_file):

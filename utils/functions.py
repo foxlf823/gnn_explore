@@ -17,8 +17,67 @@ def normalize_word(word):
             new_word += char
     return new_word
 
+def to_adj_matrix(adj):
+    matrix = []
+    for _ in range(len(adj)):
+        matrix.append([0]*len(adj))
+    for i, adj_i in enumerate(adj):
+        for j in adj_i:
+            matrix[i][j] = 1
+            matrix[j][i] = 1
+    return matrix
 
-def read_instance(input_file, word_alphabet, char_alphabet, feature_alphabets, label_alphabet, number_normalized, max_sent_length, sentence_classification=False, split_token='\t', lowercase_tokens=False, char_padding_size=-1, char_padding_symbol = '</pad>'):
+
+def heads_to_adj(heads, max_hop):
+    # find all the 1-order adj nodes
+    adj_1 = [[] for _ in range(len(heads))]
+    for i, head in enumerate(heads):
+        if head >= 0:
+            if head not in adj_1[i]:
+                adj_1[i].append(head)
+            if i not in adj_1[head]:
+                adj_1[head].append(i)
+    if max_hop == 1:
+        return [to_adj_matrix(adj_1)]
+
+    # find all the 2-order adj nodes based on adj_1
+    adj_2 = [[] for _ in range(len(heads))]
+    for i, i_adj in enumerate(adj_1):
+        for j in i_adj:
+            for k in adj_1[j]:
+                if k not in adj_2[i] and k not in adj_1[i] and k != i:
+                    adj_2[i].append(k)
+    if max_hop == 2:
+        return [to_adj_matrix(adj_1), to_adj_matrix(adj_2)]
+
+    # find all the 3-order adj nodes based on adj_2
+    adj_3 = [[] for _ in range(len(heads))]
+    for i, i_adj in enumerate(adj_2):
+        for j in i_adj:
+            for k in adj_1[j]:
+                if k not in adj_3[i] and k not in adj_2[i] and k not in adj_1[i] and k != i:
+                    adj_3[i].append(k)
+
+    if max_hop == 3:
+        return [to_adj_matrix(adj_1), to_adj_matrix(adj_2), to_adj_matrix(adj_3)]
+
+    return RuntimeError("not support")
+
+# def heads_to_adj(heads):
+#     adj = []
+#     for _ in range(len(heads)):
+#         adj.append([0]*len(heads))
+#     for i, head in enumerate(heads):
+#         if head >= 0:
+#             adj[head][i] = 1
+#             adj[i][head] = 1 # undirected
+#
+#     return adj
+
+
+
+
+def read_instance(input_file, max_hop, word_alphabet, char_alphabet, feature_alphabets, label_alphabet, number_normalized, max_sent_length, sentence_classification=False, split_token='\t', lowercase_tokens=False, char_padding_size=-1, char_padding_symbol = '</pad>'):
     feature_num = len(feature_alphabets)
     in_lines = open(input_file,'r', encoding="utf8").readlines()
     instence_texts = []
@@ -32,6 +91,7 @@ def read_instance(input_file, word_alphabet, char_alphabet, feature_alphabets, l
     feature_Ids = []
     char_Ids = []
     label_Ids = []
+    heads = []
 
     ## if sentence classification data format, splited by \t
     if sentence_classification:
@@ -111,6 +171,9 @@ def read_instance(input_file, word_alphabet, char_alphabet, feature_alphabets, l
                 labels.append(label)
                 word_Ids.append(word_alphabet.get_index(word))
                 label_Ids.append(label_alphabet.get_index(label))
+                # get_heads
+                head = int(pairs[1])
+                heads.append(head)
                 ## get features
                 feat_list = []
                 feat_Id = []
@@ -138,11 +201,10 @@ def read_instance(input_file, word_alphabet, char_alphabet, feature_alphabets, l
                 chars.append(char_list)
                 char_Ids.append(char_Id)
             else:
-                if (len(words) > 0) and ((max_sent_length < 0) or (len(words) < max_sent_length)) :
-                    instence_texts.append([words, features, chars, labels, words_processed])
-                    word_Ids_backward = word_Ids.copy()
-                    word_Ids_backward.reverse()
-                    instence_Ids.append([word_Ids, feature_Ids, char_Ids,label_Ids, word_Ids_backward])
+                if (len(words) > 0) and ((max_sent_length < 0) or (len(words) < max_sent_length)):
+                    adj = heads_to_adj(heads, max_hop)
+                    instence_texts.append([words, features, chars, labels, words_processed, adj])
+                    instence_Ids.append([word_Ids, feature_Ids, char_Ids, label_Ids])
                 words = []
                 words_processed = []
                 features = []
@@ -152,20 +214,20 @@ def read_instance(input_file, word_alphabet, char_alphabet, feature_alphabets, l
                 feature_Ids = []
                 char_Ids = []
                 label_Ids = []
-        if (len(words) > 0) and ((max_sent_length < 0) or (len(words) < max_sent_length)) :
-            instence_texts.append([words, features, chars, labels, words_processed])
-            word_Ids_backward = word_Ids.copy()
-            word_Ids_backward.reverse()
-            instence_Ids.append([word_Ids, feature_Ids, char_Ids,label_Ids, word_Ids_backward])
-            words = []
-            words_processed = []
-            features = []
-            chars = []
-            labels = []
-            word_Ids = []
-            feature_Ids = []
-            char_Ids = []
-            label_Ids = []
+                heads = []
+        if (len(words) > 0) and ((max_sent_length < 0) or (len(words) < max_sent_length)):
+            adj = heads_to_adj(heads, max_hop)
+            instence_texts.append([words, features, chars, labels, words_processed, adj])
+            instence_Ids.append([word_Ids, feature_Ids, char_Ids, label_Ids])
+            # words = []
+            # words_processed = []
+            # features = []
+            # chars = []
+            # labels = []
+            # word_Ids = []
+            # feature_Ids = []
+            # char_Ids = []
+            # label_Ids = []
     return instence_texts, instence_Ids
 
 
@@ -176,7 +238,7 @@ def build_pretrain_embedding(embedding_path, word_alphabet, embedd_dim=100, norm
         embedd_dict, embedd_dim = load_pretrain_emb(embedding_path)
     alphabet_size = word_alphabet.size()
     scale = np.sqrt(3.0 / embedd_dim)
-    pretrain_emb = np.empty([word_alphabet.size(), embedd_dim])
+    pretrain_emb = np.zeros([word_alphabet.size(), embedd_dim])
     perfect_match = 0
     case_match = 0
     not_match = 0
@@ -219,7 +281,7 @@ def load_pretrain_emb(embedding_path):
                 ## ignore illegal embedding line
                 continue
                 # assert (embedd_dim + 1 == len(tokens))
-            embedd = np.empty([1, embedd_dim])
+            embedd = np.zeros([1, embedd_dim])
             embedd[:] = tokens[1:]
             if sys.version_info[0] < 3:
                 first_col = tokens[0].decode('utf-8')

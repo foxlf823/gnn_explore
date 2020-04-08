@@ -10,6 +10,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from .wordsequence import WordSequence
+from .wordsequence1 import WordSequence1
 from .crf import CRF
 
 class SeqLabel(nn.Module):
@@ -28,14 +29,15 @@ class SeqLabel(nn.Module):
         ## add two more label for downlayer lstm, use original label size for CRF
         label_size = data.label_alphabet_size
         data.label_alphabet_size += 2
-        self.word_hidden = WordSequence(data)
+        # self.word_hidden = WordSequence(data)
+        self.word_hidden = WordSequence1(data)
         if self.use_crf:
             self.crf = CRF(label_size, self.gpu)
 
 
     def calculate_loss(self, word_inputs, feature_inputs, word_seq_lengths, char_inputs, char_seq_lengths, char_seq_recover, batch_label, mask,
-                       elmo_char_inputs):
-        outs = self.word_hidden(word_inputs,feature_inputs, word_seq_lengths, char_inputs, char_seq_lengths, char_seq_recover, elmo_char_inputs)
+                       elmo_char_inputs, adj_inputs):
+        outs = self.word_hidden(word_inputs,feature_inputs, word_seq_lengths, char_inputs, char_seq_lengths, char_seq_recover, elmo_char_inputs, mask, adj_inputs)
         batch_size = word_inputs.size(0)
         seq_len = word_inputs.size(1)
         if self.use_crf:
@@ -54,8 +56,8 @@ class SeqLabel(nn.Module):
 
 
     def forward(self, word_inputs, feature_inputs, word_seq_lengths, char_inputs, char_seq_lengths, char_seq_recover, mask,
-                elmo_char_inputs):
-        outs = self.word_hidden(word_inputs,feature_inputs, word_seq_lengths, char_inputs, char_seq_lengths, char_seq_recover, elmo_char_inputs)
+                elmo_char_inputs, adj_inputs):
+        outs = self.word_hidden(word_inputs,feature_inputs, word_seq_lengths, char_inputs, char_seq_lengths, char_seq_recover, elmo_char_inputs, mask, adj_inputs)
         batch_size = word_inputs.size(0)
         seq_len = word_inputs.size(1)
         if self.use_crf:

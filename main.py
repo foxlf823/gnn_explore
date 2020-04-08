@@ -169,7 +169,7 @@ def evaluate(data, model, name, nbest=None):
         instance_text = instances_text[start:end]
         if not instance:
             continue
-        batch_word, batch_features, batch_wordlen, batch_wordrecover, batch_char, batch_charlen, batch_charrecover, batch_label, mask, batch_elmo_char = batchify_with_label(instance, instance_text, data.HP_gpu, False, data.sentence_classification)
+        batch_word, batch_features, batch_wordlen, batch_wordrecover, batch_char, batch_charlen, batch_charrecover, batch_label, mask, batch_elmo_char, batch_adj = batchify_with_label(instance, instance_text, data.HP_gpu, False, data.sentence_classification)
         if nbest and not data.sentence_classification:
             scores, nbest_tag_seq = model.decode_nbest(batch_word,batch_features, batch_wordlen, batch_char, batch_charlen, batch_charrecover, mask, nbest, batch_elmo_char)
             nbest_pred_result = recover_nbest_label(nbest_tag_seq, mask, data.label_alphabet, batch_wordrecover)
@@ -178,7 +178,7 @@ def evaluate(data, model, name, nbest=None):
             ## select the best sequence to evalurate
             tag_seq = nbest_tag_seq[:,:,0]
         else:
-            tag_seq = model(batch_word, batch_features, batch_wordlen, batch_char, batch_charlen, batch_charrecover, mask, batch_elmo_char)
+            tag_seq = model(batch_word, batch_features, batch_wordlen, batch_char, batch_charlen, batch_charrecover, mask, batch_elmo_char, batch_adj)
         # print("tag:",tag_seq)
         pred_label, gold_label = recover_label(tag_seq, batch_label, mask, data.label_alphabet, batch_wordrecover, data.sentence_classification)
         pred_results += pred_label
@@ -229,19 +229,27 @@ def batchify_sequence_labeling_with_label(input_batch_list, input_text_batch_lis
     words_text = [sent[4] for sent in input_text_batch_list]
     elmo_char_seq_tensor = batch_to_ids(words_text)
 
+    adjs = [sent[5] for sent in input_text_batch_list]
+    hop_num = len(adjs[0])
+
     word_seq_lengths = torch.LongTensor(list(map(len, words)))
     max_seq_len = word_seq_lengths.max().item()
     word_seq_tensor = torch.zeros((batch_size, max_seq_len), requires_grad =  if_train).long()
     label_seq_tensor = torch.zeros((batch_size, max_seq_len), requires_grad =  if_train).long()
+    adj_tensor = []
+    for _ in range(hop_num):
+        adj_tensor.append(torch.zeros((batch_size, max_seq_len, max_seq_len)))
     feature_seq_tensors = []
     for idx in range(feature_num):
         feature_seq_tensors.append(torch.zeros((batch_size, max_seq_len),requires_grad =  if_train).long())
     # mask = torch.zeros((batch_size, max_seq_len), requires_grad=if_train).byte()
     mask = torch.zeros((batch_size, max_seq_len), requires_grad=if_train).bool()
-    for idx, (seq, label, seqlen) in enumerate(zip(words, labels, word_seq_lengths)):
+    for idx, (seq, label, seqlen, adj) in enumerate(zip(words, labels, word_seq_lengths, adjs)):
         seqlen = seqlen.item()
         word_seq_tensor[idx, :seqlen] = torch.LongTensor(seq)
         label_seq_tensor[idx, :seqlen] = torch.LongTensor(label)
+        for i_hop in range(hop_num):
+            adj_tensor[i_hop][idx, :seqlen, :seqlen] = torch.FloatTensor(adj[i_hop])
         mask[idx, :seqlen] = torch.Tensor([1]*seqlen)
         for idy in range(feature_num):
             feature_seq_tensors[idy][idx,:seqlen] = torch.LongTensor(features[idx][:,idy])
@@ -251,6 +259,8 @@ def batchify_sequence_labeling_with_label(input_batch_list, input_text_batch_lis
         feature_seq_tensors[idx] = feature_seq_tensors[idx][word_perm_idx]
 
     label_seq_tensor = label_seq_tensor[word_perm_idx]
+    for i_hop in range(hop_num):
+        adj_tensor[i_hop] = adj_tensor[i_hop][word_perm_idx]
     mask = mask[word_perm_idx]
     elmo_char_seq_tensor = elmo_char_seq_tensor[word_perm_idx]
     ### deal with char
@@ -278,11 +288,13 @@ def batchify_sequence_labeling_with_label(input_batch_list, input_text_batch_lis
         word_seq_lengths = word_seq_lengths.cuda(gpu)
         word_seq_recover = word_seq_recover.cuda(gpu)
         label_seq_tensor = label_seq_tensor.cuda(gpu)
+        for i_hop in range(hop_num):
+            adj_tensor[i_hop] = adj_tensor[i_hop].cuda(gpu)
         char_seq_tensor = char_seq_tensor.cuda(gpu)
         char_seq_recover = char_seq_recover.cuda(gpu)
         mask = mask.cuda(gpu)
         elmo_char_seq_tensor = elmo_char_seq_tensor.cuda(gpu)
-    return word_seq_tensor,feature_seq_tensors, word_seq_lengths, word_seq_recover, char_seq_tensor, char_seq_lengths, char_seq_recover, label_seq_tensor, mask, elmo_char_seq_tensor
+    return word_seq_tensor,feature_seq_tensors, word_seq_lengths, word_seq_recover, char_seq_tensor, char_seq_lengths, char_seq_recover, label_seq_tensor, mask, elmo_char_seq_tensor, adj_tensor
 
 
 def batchify_sentence_classification_with_label(input_batch_list, gpu, if_train=True):
@@ -433,9 +445,9 @@ def train(data):
             instance_text = data.train_texts[start:end]
             if not instance:
                 continue
-            batch_word, batch_features, batch_wordlen, batch_wordrecover, batch_char, batch_charlen, batch_charrecover, batch_label, mask, batch_elmo_char = batchify_with_label(instance, instance_text, data.HP_gpu, True, data.sentence_classification)
+            batch_word, batch_features, batch_wordlen, batch_wordrecover, batch_char, batch_charlen, batch_charrecover, batch_label, mask, batch_elmo_char, batch_adj = batchify_with_label(instance, instance_text, data.HP_gpu, True, data.sentence_classification)
             instance_count += 1
-            loss, tag_seq = model.calculate_loss(batch_word, batch_features, batch_wordlen, batch_char, batch_charlen, batch_charrecover, batch_label, mask, batch_elmo_char)
+            loss, tag_seq = model.calculate_loss(batch_word, batch_features, batch_wordlen, batch_char, batch_charlen, batch_charrecover, batch_label, mask, batch_elmo_char, batch_adj)
             right, whole = predict_check(tag_seq, batch_label, mask, data.sentence_classification)
             right_token += right
             whole_token += whole
@@ -572,6 +584,7 @@ if __name__ == '__main__':
     parser.add_argument('--loadmodel')
     parser.add_argument('--output')
     parser.add_argument('--seed_num', type=int, default=42)
+    parser.add_argument('--gpu', type=int, default=0)
 
     args = parser.parse_args()
     data = Data()
@@ -604,6 +617,7 @@ if __name__ == '__main__':
     print("Seed num:", args.seed_num)
 
     data.model_dir = args.savemodel
+    data.HP_gpu = args.gpu
 
     if status == 'train':
         print("MODEL: train")
